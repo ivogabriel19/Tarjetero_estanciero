@@ -8,14 +8,17 @@
 #define TFT_DC  4
 #define TFT_RST 15
 #define VELOCIDAD_SPI_TFT 10000000  // 10 MHz, seguro con cables de protoboard (la librería usa 40 MHz por defecto)
+#define ROTACION 3  // Horizontal (320x240), derecha según cómo está montado el display (la 1 se ve cabeza abajo)
 
 // Touch XPT2046: comparte el bus SPI con el display (T_CLK -> 18, T_DIN -> 23, T_DO -> 19)
 // T_IRQ no se usa: la librería consulta la presión por SPI
 #define TOUCH_CS 16
+#define ROTACION_TOUCH ((ROTACION + 2) % 4)  // En este display el touch está girado 180° respecto de la imagen
 
 // Valores crudos del touch (0 a 4095) en los bordes de la pantalla. Cambian de un display a otro:
 // si el punto no cae donde se toca, ajustarlos con los valores que se imprimen por serie.
-// Si un eje sale invertido, intercambiar su MIN y su MAX
+// Si un eje sale invertido, intercambiar su MIN y su MAX.
+// Son para ROTACION_TOUCH 1 (con otra rotación, la librería del touch invierte o intercambia los ejes)
 #define TOUCH_X_MIN 200
 #define TOUCH_X_MAX 3700
 #define TOUCH_Y_MIN 240
@@ -48,16 +51,16 @@ void setup() {
   imprimirRegistro("Autodiagnóstico", ILI9341_RDSELFDIAG);  // 0xC0 = sin errores
 
   touch.begin();
-  touch.setRotation(1);  // Misma orientación que el display
+  touch.setRotation(ROTACION_TOUCH);
 
   // Las pruebas de imagen se hacen una vez; después queda la prueba del touch (reiniciar para repetirlas)
-  tft.setRotation(1);  // Horizontal: 320x240
+  tft.setRotation(ROTACION);
   pruebaColores();
   pruebaBarras();
   pruebaTexto();
   pruebaFiguras();
   for (uint8_t rotacion = 0; rotacion < 4; rotacion++) pruebaRotacion(rotacion);
-  tft.setRotation(1);
+  tft.setRotation(ROTACION);
   pruebaVelocidad();
 
   Serial.println("Prueba: touch. Tocá la pantalla para dibujar");

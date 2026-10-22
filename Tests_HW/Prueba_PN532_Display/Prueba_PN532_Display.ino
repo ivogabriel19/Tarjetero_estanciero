@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ILI9341.h>
+#include <XPT2046_Touchscreen.h>
 #include "esp_log.h"
 
 // PN532 por I2C: SDA -> GPIO 21, SCL -> GPIO 22 (pines I2C por defecto del ESP32)
@@ -13,6 +14,18 @@
 #define TFT_DC  4
 #define TFT_RST 15
 #define VELOCIDAD_SPI_TFT 10000000  // 10 MHz, seguro con cables de protoboard (la librería usa 40 MHz por defecto)
+#define ROTACION 3  // Horizontal (320x240), derecha según cómo está montado el display (la 1 se ve cabeza abajo)
+
+// Touch XPT2046: comparte el bus SPI con el display (T_CLK -> 18, T_DIN -> 23, T_DO -> 19)
+// T_IRQ no se usa: la librería consulta la presión por SPI
+#define TOUCH_CS 16
+#define ROTACION_TOUCH ((ROTACION + 2) % 4)  // En este display el touch está girado 180° respecto de la imagen
+
+// Valores crudos del touch (0 a 4095) en los bordes de la pantalla, para ROTACION_TOUCH 1 (los mismos que en Prueba_Display)
+#define TOUCH_X_MIN 200
+#define TOUCH_X_MAX 3700
+#define TOUCH_Y_MIN 240
+#define TOUCH_Y_MAX 3800
 
 #define PAUSA_BUS           5     // ms de pausa entre transacciones I2C
 #define TIMEOUT_TRAMA       1000  // ms máximos de espera de cada trama del PN532
@@ -20,6 +33,7 @@
 #define INTERVALO_AVISO     2000  // ms entre avisos de "sin tarjeta"
 #define MAX_DATOS           32    // Máximo de datos que se leen de una respuesta
 #define TIEMPO_UID          2000  // ms que se muestra el UID en pantalla
+#define INTERVALO_SERIE     200   // ms entre impresiones por serie de los valores del touch
 
 // Códigos de comando del PN532
 #define CMD_GET_FIRMWARE_VERSION   0x02
@@ -29,14 +43,17 @@
 
 // Zonas de la pantalla (horizontal, 320x240)
 #define ALTO_TITULO 40
+#define ALTO_PIE    24  // Barra de abajo con las coordenadas del touch
 
 const uint8_t TRAMA_ACK[6] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
 
 Adafruit_ILI9341 tft(TFT_CS, TFT_DC, TFT_RST);  // Instancia del display con SPI por hardware
+XPT2046_Touchscreen touch(TOUCH_CS);             // Instancia del touch, en el mismo bus SPI
 
 uint8_t respuesta[MAX_DATOS];  // Datos de la última respuesta del PN532
 bool detallar = true;          // Imprime cada paso de la comunicación (mientras se inicia el lector)
 unsigned long ultimoAviso = 0;
+unsigned long ultimaImpresion = 0;
 
 void setup() {
   Serial.begin(115200);  // Inicializa la comunicación serie
@@ -46,7 +63,13 @@ void setup() {
 
   Serial.println("Prueba de lector PN532 con display en ESP32");
 
+  // El CS del touch tiene que estar en alto antes de hablar con el display, para que el touch no responda en el bus
+  pinMode(TOUCH_CS, OUTPUT);
+  digitalWrite(TOUCH_CS, HIGH);
+
   iniciarDisplay();
+  touch.begin();
+  touch.setRotation(ROTACION_TOUCH);
   mostrarMensaje("Iniciando lector...", ILI9341_WHITE);
 
   Wire.begin();  // SDA 21, SCL 22
@@ -65,6 +88,8 @@ void setup() {
 }
 
 void loop() {
+  revisarTouch();
+
   // InListPassiveTarget: busca 1 tarjeta ISO14443A (MIFARE) a 106 kbps
   uint8_t buscar[] = {CMD_IN_LIST_PASSIVE_TARGET, 0x01, 0x00};
   int largo = enviarComando("InListPassiveTarget", buscar, sizeof(buscar));
@@ -103,7 +128,7 @@ void iniciarDisplay() {
   Serial.print("Display - modo de energía: 0x");
   Serial.println(modo, HEX);
 
-  tft.setRotation(1);  // Horizontal: 320x240
+  tft.setRotation(ROTACION);
 
   // Prueba de colores: si se ven rojo, verde y azul, el display funciona
   tft.fillScreen(ILI9341_RED);
@@ -116,12 +141,17 @@ void iniciarDisplay() {
   tft.fillScreen(ILI9341_BLACK);
   tft.fillRect(0, 0, tft.width(), ALTO_TITULO, ILI9341_NAVY);
   escribirCentrado("Lector NFC", 10, 3, ILI9341_WHITE);
+  tft.fillRect(0, tft.height() - ALTO_PIE, tft.width(), ALTO_PIE, ILI9341_NAVY);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.setCursor(8, tft.height() - ALTO_PIE + 4);
+  tft.print("Toca la pantalla");
 }
 
-// Borra la zona de abajo del título y escribe un mensaje centrado
+// Borra la zona entre el título y la barra de abajo, y escribe un mensaje centrado
 // (la fuente del display no tiene tildes, por eso los textos van sin acentos)
 void mostrarMensaje(const char *mensaje, uint16_t color) {
-  tft.fillRect(0, ALTO_TITULO, tft.width(), tft.height() - ALTO_TITULO, ILI9341_BLACK);
+  tft.fillRect(0, ALTO_TITULO, tft.width(), tft.height() - ALTO_TITULO - ALTO_PIE, ILI9341_BLACK);
   escribirCentrado(mensaje, 130, 2, color);
 }
 
@@ -135,7 +165,7 @@ void mostrarUID(const uint8_t *uid, uint8_t largo) {
   char bytes[16];
   sprintf(bytes, "(%d bytes)", largo);
 
-  tft.fillRect(0, ALTO_TITULO, tft.width(), tft.height() - ALTO_TITULO, ILI9341_BLACK);
+  tft.fillRect(0, ALTO_TITULO, tft.width(), tft.height() - ALTO_TITULO - ALTO_PIE, ILI9341_BLACK);
   escribirCentrado("Tarjeta detectada", 80, 2, ILI9341_GREEN);
   escribirCentrado(texto, 125, largo <= 4 ? 4 : 2, ILI9341_WHITE);  // Los UID de 7 bytes no entran en tamaño 4
   escribirCentrado(bytes, 180, 2, ILI9341_LIGHTGREY);
@@ -149,6 +179,32 @@ void escribirCentrado(const char *texto, int16_t y, uint8_t tamanio, uint16_t co
   tft.getTextBounds(texto, 0, y, &x1, &y1, &ancho, &alto);
   tft.setCursor((tft.width() - ancho) / 2, y);
   tft.print(texto);
+}
+
+// ---------- Touch ----------
+
+// Si se toca la pantalla, dibuja un punto y muestra las coordenadas en la barra de abajo
+void revisarTouch() {
+  if (!touch.touched()) return;
+
+  TS_Point punto = touch.getPoint();
+  int16_t x = constrain(map(punto.x, TOUCH_X_MIN, TOUCH_X_MAX, 0, tft.width() - 1), 0, tft.width() - 1);
+  int16_t y = constrain(map(punto.y, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, tft.height() - 1), 0, tft.height() - 1);
+
+  if (millis() - ultimaImpresion >= INTERVALO_SERIE) {
+    ultimaImpresion = millis();
+    Serial.printf("Touch crudo: x=%d y=%d presión=%d -> pantalla: x=%d y=%d\n", punto.x, punto.y, punto.z, x, y);
+  }
+
+  char texto[32];
+  sprintf(texto, "Touch: x=%3d y=%3d", x, y);
+  tft.setTextSize(2);
+  tft.setTextColor(ILI9341_WHITE, ILI9341_NAVY);  // Con fondo, para pisar el texto anterior
+  tft.setCursor(8, tft.height() - ALTO_PIE + 4);
+  tft.print(texto);
+
+  // Solo dibuja entre el título y la barra de abajo
+  if (y >= ALTO_TITULO + 3 && y < tft.height() - ALTO_PIE - 3) tft.fillCircle(x, y, 3, ILI9341_YELLOW);
 }
 
 // ---------- PN532 ----------
