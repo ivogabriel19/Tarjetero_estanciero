@@ -4,7 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-RFID access-control firmware for an ESP32. The project is being restarted around a PN532 NFC reader and a TFT touch display. Identifiers, comments and Serial messages are in Spanish; keep new code consistent with that.
+ESP32 firmware for a "debit card" bank terminal for the board game Estanciero (an Argentine Monopoly), built from a PN532 NFC reader and a TFT touch display. It replaces the paper money. The project started as RFID access control, and that earlier version is kept below. Identifiers, comments and Serial messages are in Spanish; keep new code consistent with that.
+
+### Terminal_Estanciero (main sketch)
+
+`Terminal_Estanciero/Terminal_Estanciero.ino` reuses the PN532 code and the display and touch settings from `Tests_HW/` unchanged. It compiles, but it has not been run on the hardware yet.
+
+- Each card only identifies a player. Balances are kept in the ESP32's NVS (`Preferences`, namespace `estanciero`, key `partida`) as one `Partida` struct, which is saved after every change. Bump `VERSION_PARTIDA` whenever that struct changes. The bank has unlimited money.
+- Players are named and colored by their slot (`FICHAS`: Rojo, Azul, ...) in the order their cards were tapped during "NUEVA PARTIDA".
+- `loop()` is the main menu. Each operation (cobrar, pagar, transferir, salida, jugadores, deshacer) is a blocking function: keypad (`pedirMonto`), then card (`esperarJugador`), then result screen. Tapping a card on the main menu shows its balance.
+- A payment is rejected if the payer's balance is too low. The last `MAX_HISTORIAL` operations are kept so they can be undone one at a time, newest first.
+- `tarjetaNueva()` reports a card only when it arrives, not on every poll while it rests on the reader. The card counts as removed after `LECTURAS_PARA_RETIRAR` polls in a row without it. `olvidarTarjeta()` makes a card that is already on the reader count again.
+- `DINERO_INICIAL` and `MONTO_SALIDA` are placeholders until the user checks them against their edition's rulebook.
+
+### Hardware tests
 
 The hardware test sketches live in `Tests_HW/`:
 
@@ -41,6 +54,7 @@ Wiring (RC522 → ESP32), from `Conexiones RC522-ESP32.jpg`: VCC→3.3V, GND→G
 There are no automated tests and no linter. The `Tests_HW/` sketches are run by hand on the hardware, and the user pastes the Serial Monitor output back. The project is developed in the Arduino IDE, with the ESP32 core `esp32:esp32` 3.3.x, Adafruit ILI9341 1.7.0 + Adafruit GFX 1.13.0, XPT2046_Touchscreen 1.4.0, Adafruit_PN532 1.3.4 (installed but no longer used) and the MFRC522 library (miguelbalboa) 1.4.12. Arduino requires each `.ino` to sit in a folder with the same name. arduino-cli is not on PATH, but the IDE bundles it at `C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe`:
 
 ```
+arduino-cli compile --fqbn esp32:esp32:esp32 Terminal_Estanciero
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532_Display
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_Display
