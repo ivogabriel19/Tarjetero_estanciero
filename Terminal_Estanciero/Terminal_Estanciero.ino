@@ -17,6 +17,7 @@
 #define MONTO_MAXIMO   99999999  // Máximo que se puede ingresar con el teclado
 #define MAX_JUGADORES  8
 #define MAX_HISTORIAL  30        // Cuántas operaciones se pueden deshacer, de la última para atrás
+#define LARGO_NOMBRE   10        // Máximo de letras del nombre de un jugador
 
 // ---------- Hardware ----------
 // PN532 por I2C: SDA -> GPIO 21, SCL -> GPIO 22 (pines I2C por defecto del ESP32)
@@ -72,11 +73,12 @@
 #define BANCO   -1  // En una operación, el banco en lugar de un jugador
 #define NINGUNO -2  // Ningún jugador (tarjeta no registrada, operación cancelada)
 
-#define VERSION_PARTIDA 1  // Cambiarla si cambia la estructura Partida, para no cargar datos guardados con otra forma
+#define VERSION_PARTIDA 2  // Cambiarla si cambia la estructura Partida, para no cargar datos guardados con otra forma
 
 struct Jugador {
   uint8_t uid[LARGO_MAX_UID];  // UID de su tarjeta
   uint8_t largoUid;
+  char nombre[LARGO_NOMBRE + 1];
   int32_t saldo;
 };
 
@@ -96,7 +98,8 @@ struct Partida {
   Operacion historial[MAX_HISTORIAL];  // La última operación es la del final
 };
 
-// Nombre y color con los que se muestra cada jugador (conviene marcar cada tarjeta con su color)
+// Color de cada jugador, según el orden en que se registró su tarjeta (conviene marcar cada tarjeta con su color),
+// y el nombre que tiene si no se le pone otro
 struct Ficha {
   const char *nombre;
   uint16_t color;
@@ -118,21 +121,33 @@ const Ficha FICHA_BANCO = {"Banco", ILI9341_LIGHTGREY, ILI9341_BLACK};
 struct Boton {
   int16_t x, y, ancho, alto;
   const char *texto;
-  const char *detalle;  // Segunda línea, en letra chica (nullptr si no tiene)
+  const char *detalle;  // Segunda línea, con letra un tamaño más chica (nullptr si no tiene)
   uint16_t color;
   uint8_t tamanio;      // Tamaño de la letra del texto
 };
 
-// Menú principal: 2 columnas x 3 filas
-enum { MENU_COBRAR, MENU_PAGAR, MENU_TRANSFERIR, MENU_SALIDA, MENU_JUGADORES, MENU_DESHACER, CANTIDAD_MENU };
+// Menú principal: dos botones grandes y abajo dos más chicos
+enum { MENU_SALIDA, MENU_TRANSACCIONES, MENU_SALDOS, MENU_DESHACER, CANTIDAD_MENU };
 char detalleSalida[16];  // "+$5.000": se arma en setup() con MONTO_SALIDA
 const Boton MENU[CANTIDAD_MENU] = {
-  {6,   42,  151, 52, "COBRAR",     "el banco paga",    COLOR_VERDE,   2},
-  {163, 42,  151, 52, "PAGAR",      "al banco",         COLOR_ROJO,    2},
-  {6,   100, 151, 52, "TRANSFERIR", "entre jugadores",  COLOR_AZUL,    2},
-  {163, 100, 151, 52, "SALIDA",     detalleSalida,      COLOR_NARANJA, 2},
-  {6,   158, 151, 52, "JUGADORES",  "saldos y partida", COLOR_VIOLETA, 2},
-  {163, 158, 151, 52, "DESHACER",   "ultima operacion", COLOR_GRIS,    2},
+  {6,   42,  308, 60, "COBRAR SALIDA", detalleSalida,               COLOR_NARANJA, 3},
+  {6,   108, 308, 60, "TRANSACCIONES", "sumar, quitar, transferir", COLOR_AZUL,    3},
+  {6,   196, 120, 40, "SALDOS",        nullptr,                     COLOR_VIOLETA, 2},
+  {194, 196, 120, 40, "DESHACER",      nullptr,                     COLOR_GRIS,    2},
+};
+
+enum { TRANSACCION_SUMAR, TRANSACCION_QUITAR, TRANSACCION_TRANSFERIR, TRANSACCION_VOLVER, CANTIDAD_TRANSACCIONES };
+const Boton TRANSACCIONES[CANTIDAD_TRANSACCIONES] = {
+  {6, 40,  308, 50, "SUMAR",      "el banco paga al jugador", COLOR_VERDE, 3},
+  {6, 94,  308, 50, "QUITAR",     "el jugador paga al banco", COLOR_ROJO,  3},
+  {6, 148, 308, 50, "TRANSFERIR", "de un jugador a otro",     COLOR_AZUL,  3},
+  {6, 204, 110, 32, "VOLVER",     nullptr,                    COLOR_GRIS,  2},
+};
+
+// Al prender, si hay una partida guardada
+const Boton BOTONES_INICIO[2] = {
+  {6,   170, 124, 64, "NUEVA",     "partida", COLOR_ROJO,  3},
+  {136, 170, 178, 64, "CONTINUAR", "partida", COLOR_VERDE, 3},
 };
 
 // Teclado numérico: 4 columnas (x = 4, 83, 162, 241) x 4 filas (y = 88, 126, 164, 202)
@@ -161,14 +176,22 @@ const Boton BOTONES_CONFIRMAR[2] = {
   {6,   190, 150, 44, "NO", nullptr, COLOR_GRIS,  3},
   {164, 190, 150, 44, "SI", nullptr, COLOR_VERDE, 3},
 };
-const Boton BOTONES_JUGADORES[2] = {
+const Boton BOTONES_SALDOS[2] = {
   {6,   204, 110, 32, "VOLVER",        nullptr, COLOR_GRIS, 2},
   {122, 204, 192, 32, "NUEVA PARTIDA", nullptr, COLOR_ROJO, 2},
 };
+// Registro de tarjetas: EMPEZAR siempre, CANCELAR solo si hay una partida a la que volver
 const Boton BOTONES_REGISTRO[2] = {
+  {164, 200, 150, 36, "EMPEZAR",  nullptr, COLOR_VERDE, 2},
   {6,   200, 150, 36, "CANCELAR", nullptr, COLOR_ROJO,  2},
-  {164, 200, 150, 36, "LISTO",    nullptr, COLOR_VERDE, 2},
 };
+
+// Teclado de letras para los nombres: 3 filas de letras y una de botones. Se arma en armarTecladoLetras()
+// Las teclas 0 a 25 son las letras, en el orden de FILAS_LETRAS
+const char *FILAS_LETRAS[3] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+enum { LETRA_BORRAR = 26, LETRA_CANCELAR, LETRA_ESPACIO, LETRA_OK, CANTIDAD_LETRAS };
+Boton TECLADO_LETRAS[CANTIDAD_LETRAS];
+char letras[26][2];  // Texto de cada tecla de letra
 
 const uint8_t TRAMA_ACK[6] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
 
@@ -206,6 +229,7 @@ void setup() {
   char monto[16];
   formatearMonto(MONTO_SALIDA, monto);
   sprintf(detalleSalida, "+%s", monto);
+  armarTecladoLetras();
 
   cargarPartida();
 
@@ -221,6 +245,8 @@ void setup() {
 
   iniciarLector();
   Serial.println("Terminal lista");
+
+  elegirPartida();
 }
 
 // Menú principal. Si se acerca una tarjeta sin elegir una operación, se muestra su saldo
@@ -233,17 +259,11 @@ void loop() {
   int opcion = botonTocado(MENU, CANTIDAD_MENU);
   if (opcion >= 0) {
     redibujarMenu = true;
-    if (opcion <= MENU_SALIDA && partida.cantidadJugadores == 0) {
-      mostrarAviso("SIN JUGADORES", COLOR_ROJO, "Primero registra las", "tarjetas en JUGADORES");
-      return;
-    }
     switch (opcion) {
-      case MENU_COBRAR:     cobrar(); break;
-      case MENU_PAGAR:      pagar(); break;
-      case MENU_TRANSFERIR: transferir(); break;
-      case MENU_SALIDA:     cobrarSalida(); break;
-      case MENU_JUGADORES:  verJugadores(); break;
-      case MENU_DESHACER:   deshacer(); break;
+      case MENU_SALIDA:        cobrarSalida(); break;
+      case MENU_TRANSACCIONES: transacciones(); break;
+      case MENU_SALDOS:        verSaldos(); break;
+      case MENU_DESHACER:      deshacer(); break;
     }
     return;
   }
@@ -256,56 +276,205 @@ void loop() {
   }
 }
 
+// ---------- Partida ----------
+
+// Al prender: seguir con la partida guardada o empezar una nueva
+void elegirPartida() {
+  while (true) {
+    if (partida.cantidadJugadores > 0) {
+      dibujarTitulo("BANCO ESTANCIERO", COLOR_TITULO);
+      escribirCentrado("Partida guardada", 44, 2, ILI9341_LIGHTGREY);
+      dibujarEtiquetasJugadores(68);
+      for (uint8_t i = 0; i < 2; i++) dibujarBoton(BOTONES_INICIO[i], false);
+      if (esperarBoton(BOTONES_INICIO, 2) == 1) return;  // CONTINUAR
+    }
+    if (nuevaPartida()) return;
+  }
+}
+
+// Registra las tarjetas de una partida nueva, cada una con el nombre de su jugador y DINERO_INICIAL.
+// Si ya había una partida se puede cancelar para seguir con ella, y entonces devuelve false
+bool nuevaPartida() {
+  // Se anota sobre la partida en memoria, pero se guarda recién al EMPEZAR: si se cancela, se vuelve a esta.
+  // También sirve para que una tarjeta de la partida anterior arranque con el mismo nombre
+  Partida anterior = partida;
+  bool cancelable = anterior.cantidadJugadores > 0;
+  partida.cantidadJugadores = 0;
+  partida.cantidadHistorial = 0;
+
+  dibujarRegistro(cancelable);
+  olvidarTarjeta();  // Si ya hay una tarjeta apoyada, también se anota
+
+  while (true) {
+    int boton = botonTocado(BOTONES_REGISTRO, cancelable ? 2 : 1);
+    if (boton == 1) {  // CANCELAR
+      partida = anterior;
+      return false;
+    }
+    if (boton == 0) {  // EMPEZAR
+      if (partida.cantidadJugadores > 0) break;
+      mostrarAvisoEnLinea("Falta acercar tarjetas", 176);
+      continue;
+    }
+
+    uint8_t uid[LARGO_MAX_UID];
+    uint8_t largo;
+    if (!tarjetaNueva(uid, largo)) continue;
+
+    int8_t jugador = buscarJugador(partida.jugadores, partida.cantidadJugadores, uid, largo);
+    if (jugador != NINGUNO) {
+      // Ya está anotada: se le cambia el nombre
+      pedirNombre(jugador, partida.jugadores[jugador].nombre);
+    } else if (partida.cantidadJugadores == MAX_JUGADORES) {
+      mostrarAvisoEnLinea("No entran mas jugadores", 176);
+      continue;
+    } else {
+      uint8_t numero = partida.cantidadJugadores;
+      Jugador &nuevo = partida.jugadores[numero];
+      int8_t antes = buscarJugador(anterior.jugadores, anterior.cantidadJugadores, uid, largo);
+      strcpy(nuevo.nombre, antes != NINGUNO ? anterior.jugadores[antes].nombre : FICHAS[numero].nombre);
+      if (pedirNombre(numero, nuevo.nombre)) {
+        memcpy(nuevo.uid, uid, largo);
+        nuevo.largoUid = largo;
+        nuevo.saldo = DINERO_INICIAL;
+        partida.cantidadJugadores++;
+      }
+    }
+    dibujarRegistro(cancelable);
+  }
+
+  guardarPartida();
+  Serial.print("Nueva partida. ");
+  imprimirPartida();
+  return true;
+}
+
+// Pide el nombre de un jugador con el teclado de letras. Arranca mostrando "nombre", que la primera tecla
+// reemplaza entero. Con OK deja el nombre nuevo en "nombre" y devuelve true; con CANCELAR, false
+bool pedirNombre(uint8_t jugador, char *nombre) {
+  char texto[LARGO_NOMBRE + 1];
+  strcpy(texto, nombre);
+  bool reemplazar = true;
+
+  char titulo[24];
+  sprintf(titulo, "NOMBRE DEL JUGADOR %d", jugador + 1);
+  dibujarTitulo(titulo, COLOR_TITULO);
+  for (uint8_t i = 0; i < CANTIDAD_LETRAS; i++) dibujarBoton(TECLADO_LETRAS[i], false);
+  dibujarNombreTeclado(jugador, texto, reemplazar);
+
+  while (true) {
+    int tecla = esperarBoton(TECLADO_LETRAS, CANTIDAD_LETRAS);
+    if (tecla == LETRA_CANCELAR) return false;
+    if (tecla == LETRA_OK) break;
+
+    if (reemplazar) {
+      texto[0] = '\0';
+      reemplazar = false;
+    }
+    uint8_t largo = strlen(texto);
+    char letra = '\0';
+    if (tecla == LETRA_BORRAR) {
+      if (largo > 0) texto[largo - 1] = '\0';
+    } else if (tecla == LETRA_ESPACIO) {
+      if (largo > 0 && texto[largo - 1] != ' ') letra = ' ';  // Sin espacios al principio ni dos seguidos
+    } else {
+      // Mayúscula al principio de cada palabra y minúscula en el resto
+      letra = letras[tecla][0];
+      if (largo > 0 && texto[largo - 1] != ' ') letra = tolower(letra);
+    }
+    if (letra != '\0' && largo < LARGO_NOMBRE) {
+      texto[largo] = letra;
+      texto[largo + 1] = '\0';
+    }
+    dibujarNombreTeclado(jugador, texto, reemplazar);
+  }
+
+  // Sin espacios al final. Si quedó vacío, el jugador se llama como su color
+  uint8_t largo = strlen(texto);
+  while (largo > 0 && texto[largo - 1] == ' ') texto[--largo] = '\0';
+  strcpy(nombre, largo > 0 ? texto : FICHAS[jugador].nombre);
+  return true;
+}
+
+// Lista de jugadores con sus saldos, y el botón para empezar una partida nueva
+void verSaldos() {
+  dibujarTitulo("SALDOS", MENU[MENU_SALDOS].color);
+  for (uint8_t i = 0; i < partida.cantidadJugadores; i++) dibujarFilaSaldo(i, 42 + i * 20);
+  for (uint8_t i = 0; i < 2; i++) dibujarBoton(BOTONES_SALDOS[i], false);
+
+  if (esperarBoton(BOTONES_SALDOS, 2) == 1) nuevaPartida();
+}
+
 // ---------- Operaciones ----------
 
-// El banco le paga a un jugador
-void cobrar() {
-  uint16_t color = MENU[MENU_COBRAR].color;
-  int32_t monto = pedirMonto("COBRAR DEL BANCO", color);
-  if (monto == 0) return;
-  int8_t jugador = esperarJugador("COBRAR DEL BANCO", color, monto, "de quien cobra", NINGUNO);
-  if (jugador == NINGUNO) return;
+// Sumar, quitar o transferir. Si se cancela una operación se vuelve a esta pantalla; si se hizo, al menú
+void transacciones() {
+  while (true) {
+    dibujarTitulo("TRANSACCIONES", MENU[MENU_TRANSACCIONES].color);
+    for (uint8_t i = 0; i < CANTIDAD_TRANSACCIONES; i++) dibujarBoton(TRANSACCIONES[i], false);
+
+    bool hecha;
+    switch (esperarBoton(TRANSACCIONES, CANTIDAD_TRANSACCIONES)) {
+      case TRANSACCION_SUMAR:      hecha = sumar(); break;
+      case TRANSACCION_QUITAR:     hecha = quitar(); break;
+      case TRANSACCION_TRANSFERIR: hecha = transferir(); break;
+      default: return;  // VOLVER
+    }
+    if (hecha) return;
+  }
+}
+
+// El banco le paga a un jugador. Devuelve false si se cancela
+bool sumar() {
+  uint16_t color = TRANSACCIONES[TRANSACCION_SUMAR].color;
+  int32_t monto = pedirMonto("SUMAR", color);
+  if (monto == 0) return false;
+  int8_t jugador = esperarJugador("SUMAR", color, monto, "de quien cobra", NINGUNO);
+  if (jugador == NINGUNO) return false;
   operar(BANCO, jugador, monto);
   mostrarOperacion("OPERACION APROBADA", BANCO, jugador, monto);
+  return true;
 }
 
-// Un jugador le paga al banco
-void pagar() {
-  uint16_t color = MENU[MENU_PAGAR].color;
-  int32_t monto = pedirMonto("PAGAR AL BANCO", color);
-  if (monto == 0) return;
-  int8_t jugador = esperarJugador("PAGAR AL BANCO", color, monto, "de quien paga", NINGUNO);
-  if (jugador == NINGUNO) return;
+// Un jugador le paga al banco. Devuelve false si se cancela (si se rechaza por falta de saldo, true)
+bool quitar() {
+  uint16_t color = TRANSACCIONES[TRANSACCION_QUITAR].color;
+  int32_t monto = pedirMonto("QUITAR", color);
+  if (monto == 0) return false;
+  int8_t jugador = esperarJugador("QUITAR", color, monto, "de quien paga", NINGUNO);
+  if (jugador == NINGUNO) return false;
   if (!operar(jugador, BANCO, monto)) {
     mostrarSaldoInsuficiente(jugador, monto);
-    return;
+    return true;
   }
   mostrarOperacion("OPERACION APROBADA", jugador, BANCO, monto);
+  return true;
 }
 
-// Un jugador le paga a otro
-void transferir() {
-  uint16_t color = MENU[MENU_TRANSFERIR].color;
+// Un jugador le paga a otro. Devuelve false si se cancela (si se rechaza por falta de saldo, true)
+bool transferir() {
+  uint16_t color = TRANSACCIONES[TRANSACCION_TRANSFERIR].color;
   int32_t monto = pedirMonto("TRANSFERIR", color);
-  if (monto == 0) return;
+  if (monto == 0) return false;
   int8_t origen = esperarJugador("TRANSFERIR", color, monto, "de quien paga", NINGUNO);
-  if (origen == NINGUNO) return;
+  if (origen == NINGUNO) return false;
 
   // Se revisa el saldo antes de pedir la tarjeta de quien cobra
   if (partida.jugadores[origen].saldo < monto) {
     mostrarSaldoInsuficiente(origen, monto);
-    return;
+    return true;
   }
 
   int8_t destino = esperarJugador("TRANSFERIR", color, monto, "de quien cobra", origen);
-  if (destino == NINGUNO) return;
+  if (destino == NINGUNO) return false;
   operar(origen, destino, monto);
   mostrarOperacion("OPERACION APROBADA", origen, destino, monto);
+  return true;
 }
 
 // El banco le paga MONTO_SALIDA a un jugador que pasó por la salida
 void cobrarSalida() {
-  int8_t jugador = esperarJugador("SALIDA", MENU[MENU_SALIDA].color, MONTO_SALIDA, "de quien cobra", NINGUNO);
+  int8_t jugador = esperarJugador("COBRAR SALIDA", MENU[MENU_SALIDA].color, MONTO_SALIDA, "de quien cobra", NINGUNO);
   if (jugador == NINGUNO) return;
   operar(BANCO, jugador, MONTO_SALIDA);
   mostrarOperacion("OPERACION APROBADA", BANCO, jugador, MONTO_SALIDA);
@@ -321,7 +490,7 @@ void deshacer() {
 
   Operacion operacion = partida.historial[partida.cantidadHistorial - 1];
   char participantes[32], monto[16];
-  sprintf(participantes, "%s -> %s", ficha(operacion.origen).nombre, ficha(operacion.destino).nombre);
+  sprintf(participantes, "%s -> %s", nombreDe(operacion.origen), nombreDe(operacion.destino));
   formatearMonto(operacion.monto, monto);
   if (!confirmar("DESHACER", color, participantes, monto)) return;
 
@@ -340,79 +509,19 @@ void consultarSaldo(const uint8_t *uid, uint8_t largo) {
   int8_t jugador = buscarJugador(partida.jugadores, partida.cantidadJugadores, uid, largo);
   if (jugador == NINGUNO) {
     Serial.println("Tarjeta no registrada");
-    mostrarAviso("SALDO", COLOR_ROJO, "Tarjeta no registrada", "Se registra en JUGADORES");
+    mostrarAviso("SALDO", COLOR_ROJO, "Tarjeta no registrada", "en esta partida");
     return;
   }
 
   char saldo[16];
   formatearMonto(partida.jugadores[jugador].saldo, saldo);
-  Serial.printf("Saldo de %s: %s\n", FICHAS[jugador].nombre, saldo);
+  Serial.printf("Saldo de %s: %s\n", nombreDe(jugador), saldo);
 
   dibujarTitulo("SALDO", COLOR_TITULO);
   dibujarEtiqueta(jugador, (tft.width() - anchoEtiqueta(jugador, 3)) / 2, 64, 3);
   escribirCentrado(saldo, 120, 4, ILI9341_WHITE);
   dibujarPie("Toca para seguir");
   esperarToque(TIEMPO_RESULTADO);
-}
-
-// Lista de jugadores con sus saldos, y el botón para empezar una partida nueva
-void verJugadores() {
-  dibujarTitulo("JUGADORES", MENU[MENU_JUGADORES].color);
-  if (partida.cantidadJugadores == 0) {
-    escribirCentrado("No hay jugadores", 90, 2, ILI9341_WHITE);
-    escribirCentrado("Toca NUEVA PARTIDA", 120, 2, ILI9341_LIGHTGREY);
-  }
-  for (uint8_t i = 0; i < partida.cantidadJugadores; i++) dibujarFilaSaldo(i, 42 + i * 20);
-  for (uint8_t i = 0; i < 2; i++) dibujarBoton(BOTONES_JUGADORES[i], false);
-
-  if (esperarBoton(BOTONES_JUGADORES, 2) == 1) nuevaPartida();
-}
-
-// Borra la partida y registra las tarjetas de los jugadores, cada uno con DINERO_INICIAL
-void nuevaPartida() {
-  if (!confirmar("NUEVA PARTIDA", COLOR_ROJO, "Se borran los jugadores", "y todos los saldos")) return;
-
-  // Los jugadores se anotan aparte: si se cancela, sigue la partida anterior
-  Jugador jugadores[MAX_JUGADORES];
-  uint8_t cantidad = 0;
-
-  dibujarTitulo("NUEVA PARTIDA", COLOR_ROJO);
-  escribirCentrado("Acerca cada tarjeta", 46, 2, ILI9341_WHITE);
-  for (uint8_t i = 0; i < 2; i++) dibujarBoton(BOTONES_REGISTRO[i], false);
-  olvidarTarjeta();  // Si ya hay una tarjeta apoyada, también se anota
-
-  while (true) {
-    int boton = botonTocado(BOTONES_REGISTRO, 2);
-    if (boton == 0) return;  // CANCELAR
-    if (boton == 1) {        // LISTO
-      if (cantidad > 0) break;
-      mostrarAvisoEnLinea("Falta acercar tarjetas", 176);
-      continue;
-    }
-
-    uint8_t uid[LARGO_MAX_UID];
-    uint8_t largo;
-    if (!tarjetaNueva(uid, largo)) continue;
-    if (buscarJugador(jugadores, cantidad, uid, largo) != NINGUNO) {
-      mostrarAvisoEnLinea("Ya esta anotada", 176);
-    } else if (cantidad == MAX_JUGADORES) {
-      mostrarAvisoEnLinea("No entran mas jugadores", 176);
-    } else {
-      memcpy(jugadores[cantidad].uid, uid, largo);
-      jugadores[cantidad].largoUid = largo;
-      jugadores[cantidad].saldo = DINERO_INICIAL;
-      dibujarEtiqueta(cantidad, cantidad % 2 == 0 ? 20 : 170, 76 + (cantidad / 2) * 24, 2);  // En 2 columnas
-      mostrarAvisoEnLinea("", 176);
-      cantidad++;
-    }
-  }
-
-  memcpy(partida.jugadores, jugadores, cantidad * sizeof(Jugador));
-  partida.cantidadJugadores = cantidad;
-  partida.cantidadHistorial = 0;
-  guardarPartida();
-  Serial.print("Nueva partida. ");
-  imprimirPartida();
 }
 
 // ---------- Saldos ----------
@@ -451,6 +560,10 @@ int8_t buscarJugador(const Jugador *jugadores, uint8_t cantidad, const uint8_t *
 
 const Ficha &ficha(int8_t jugador) {
   return jugador == BANCO ? FICHA_BANCO : FICHAS[jugador];
+}
+
+const char *nombreDe(int8_t jugador) {
+  return jugador == BANCO ? FICHA_BANCO.nombre : partida.jugadores[jugador].nombre;
 }
 
 void cargarPartida() {
@@ -493,7 +606,7 @@ void imprimirPartida() {
   for (uint8_t i = 0; i < partida.cantidadJugadores; i++) {
     char saldo[16];
     formatearMonto(partida.jugadores[i].saldo, saldo);
-    Serial.printf("  %s: %s. Tarjeta:", FICHAS[i].nombre, saldo);
+    Serial.printf("  %s (%s): %s. Tarjeta:", nombreDe(i), FICHAS[i].nombre, saldo);
     imprimirBytes(partida.jugadores[i].uid, partida.jugadores[i].largoUid);
   }
 }
@@ -502,7 +615,7 @@ void imprimirPartida() {
 void imprimirOperacion(const char *titulo, int8_t origen, int8_t destino, int32_t monto) {
   char texto[16];
   formatearMonto(monto, texto);
-  Serial.printf("%s: %s -> %s %s.", titulo, ficha(origen).nombre, ficha(destino).nombre, texto);
+  Serial.printf("%s: %s -> %s %s.", titulo, nombreDe(origen), nombreDe(destino), texto);
   if (origen != BANCO) imprimirSaldo(origen);
   if (destino != BANCO) imprimirSaldo(destino);
   Serial.println();
@@ -511,7 +624,7 @@ void imprimirOperacion(const char *titulo, int8_t origen, int8_t destino, int32_
 void imprimirSaldo(int8_t jugador) {
   char saldo[16];
   formatearMonto(partida.jugadores[jugador].saldo, saldo);
-  Serial.printf(" Saldo de %s: %s.", FICHAS[jugador].nombre, saldo);
+  Serial.printf(" Saldo de %s: %s.", nombreDe(jugador), saldo);
 }
 
 // ---------- Pantallas ----------
@@ -525,7 +638,51 @@ void mostrarInicio(const char *mensaje, uint16_t color) {
 void dibujarMenu() {
   dibujarTitulo("BANCO ESTANCIERO", COLOR_TITULO);
   for (uint8_t i = 0; i < CANTIDAD_MENU; i++) dibujarBoton(MENU[i], false);
-  dibujarPie("Ver saldo: acerca tarjeta");
+  escribirCentrado("Saldo: acerca la tarjeta", 175, 2, ILI9341_LIGHTGREY);
+}
+
+// Pantalla de registro de tarjetas, con los jugadores anotados hasta ahora
+void dibujarRegistro(bool cancelable) {
+  dibujarTitulo("NUEVA PARTIDA", COLOR_ROJO);
+  escribirCentrado("Acerca cada tarjeta", 44, 2, ILI9341_WHITE);
+  escribirCentrado("Para cambiar un nombre, acerca de nuevo su tarjeta", 64, 1, ILI9341_LIGHTGREY);
+  dibujarEtiquetasJugadores(78);
+  for (uint8_t i = 0; i < (cancelable ? 2 : 1); i++) dibujarBoton(BOTONES_REGISTRO[i], false);
+}
+
+// Los nombres de los jugadores en 2 columnas, desde la altura "y"
+void dibujarEtiquetasJugadores(int16_t y) {
+  for (uint8_t i = 0; i < partida.cantidadJugadores; i++) {
+    dibujarEtiqueta(i, i % 2 == 0 ? 20 : 170, y + (i / 2) * 24, 2);
+  }
+}
+
+// Arma las teclas del teclado de letras: 3 filas de teclas de 30x34, cada una corrida a la derecha
+// como en un teclado de verdad, y abajo CANCELAR, ESPACIO y OK
+void armarTecladoLetras() {
+  uint8_t n = 0;
+  for (uint8_t fila = 0; fila < 3; fila++) {
+    for (uint8_t i = 0; FILAS_LETRAS[fila][i] != '\0'; i++, n++) {
+      letras[n][0] = FILAS_LETRAS[fila][i];
+      letras[n][1] = '\0';
+      TECLADO_LETRAS[n] = {(int16_t)(1 + fila * 16 + i * 32), (int16_t)(78 + fila * 38), 30, 34,
+                           letras[n], nullptr, COLOR_TECLA, 2};
+    }
+  }
+  TECLADO_LETRAS[LETRA_BORRAR]   = {257, 154, 62,  34, "<",        nullptr, COLOR_NARANJA, 3};
+  TECLADO_LETRAS[LETRA_CANCELAR] = {1,   194, 104, 42, "CANCELAR", nullptr, COLOR_ROJO,    2};
+  TECLADO_LETRAS[LETRA_ESPACIO]  = {109, 194, 102, 42, "ESPACIO",  nullptr, COLOR_TECLA,   2};
+  TECLADO_LETRAS[LETRA_OK]       = {215, 194, 104, 42, "OK",       nullptr, COLOR_VERDE,   3};
+}
+
+// El nombre que se está escribiendo, tal como va a quedar la etiqueta del jugador.
+// Mientras se escribe tiene un cursor al final; mientras se puede reemplazar entero, no
+void dibujarNombreTeclado(uint8_t jugador, const char *texto, bool reemplazar) {
+  char conCursor[LARGO_NOMBRE + 2];
+  strcpy(conCursor, texto);
+  if (!reemplazar) strcat(conCursor, "_");
+  tft.fillRect(0, ALTO_TITULO, tft.width(), 40, ILI9341_BLACK);
+  dibujarRotulo(conCursor, FICHAS[jugador], (tft.width() - anchoRotulo(conCursor, 3)) / 2, 44, 3);
 }
 
 // Pide un monto con el teclado. Devuelve el monto, o 0 si se toca SALIR
@@ -619,9 +776,17 @@ void mostrarSaldoInsuficiente(int8_t jugador, int32_t monto) {
   char saldo[16], aPagar[16], texto[32];
   formatearMonto(partida.jugadores[jugador].saldo, saldo);
   formatearMonto(monto, aPagar);
-  Serial.printf("Rechazada: %s no puede pagar %s (tiene %s)\n", FICHAS[jugador].nombre, aPagar, saldo);
-  sprintf(texto, "%s tiene %s", FICHAS[jugador].nombre, saldo);
-  mostrarAviso("RECHAZADA", COLOR_ROJO, "Saldo insuficiente", texto);
+  Serial.printf("Rechazada: %s no puede pagar %s (tiene %s)\n", nombreDe(jugador), aPagar, saldo);
+
+  dibujarTitulo("RECHAZADA", COLOR_ROJO);
+  escribirCentrado("Saldo insuficiente", 50, 2, ILI9341_WHITE);
+  dibujarEtiqueta(jugador, (tft.width() - anchoEtiqueta(jugador, 3)) / 2, 80, 3);
+  sprintf(texto, "Tiene %s", saldo);
+  escribirCentrado(texto, 124, 2, ILI9341_WHITE);
+  sprintf(texto, "A pagar %s", aPagar);
+  escribirCentrado(texto, 150, 2, ILI9341_WHITE);
+  dibujarPie("Toca para seguir");
+  esperarToque(TIEMPO_RESULTADO);
 }
 
 // Pantalla con un título y dos líneas de texto; queda hasta que se toca o pasa TIEMPO_RESULTADO
@@ -668,22 +833,33 @@ void dibujarBoton(const Boton &boton, bool presionado) {
   uint16_t letra = presionado ? boton.color : ILI9341_WHITE;
   tft.fillRoundRect(boton.x, boton.y, boton.ancho, boton.alto, 6, fondo);
 
+  uint8_t tamanioDetalle = boton.tamanio > 1 ? boton.tamanio - 1 : 1;
   int16_t altoTexto = 8 * boton.tamanio;
-  if (boton.detalle) altoTexto += 4 + 8;
+  if (boton.detalle) altoTexto += 4 + 8 * tamanioDetalle;
   int16_t y = boton.y + (boton.alto - altoTexto) / 2;
   escribirEnCaja(boton.texto, boton.x, boton.ancho, y, boton.tamanio, letra);
-  if (boton.detalle) escribirEnCaja(boton.detalle, boton.x, boton.ancho, y + 8 * boton.tamanio + 4, 1, letra);
+  if (boton.detalle) {
+    escribirEnCaja(boton.detalle, boton.x, boton.ancho, y + 8 * boton.tamanio + 4, tamanioDetalle, letra);
+  }
+}
+
+int16_t anchoRotulo(const char *texto, uint8_t tamanio) {
+  return anchoTexto(texto, tamanio) + 6 * tamanio;
+}
+
+// Dibuja un texto sobre un rectángulo con los colores de una ficha
+void dibujarRotulo(const char *texto, const Ficha &f, int16_t x, int16_t y, uint8_t tamanio) {
+  tft.fillRoundRect(x, y, anchoRotulo(texto, tamanio), 8 * tamanio + 2, 4, f.color);
+  escribir(texto, x + 3 * tamanio, y + 1, tamanio, f.colorLetra);
 }
 
 int16_t anchoEtiqueta(int8_t jugador, uint8_t tamanio) {
-  return anchoTexto(ficha(jugador).nombre, tamanio) + 6 * tamanio;
+  return anchoRotulo(nombreDe(jugador), tamanio);
 }
 
 // Dibuja el nombre de un jugador (o del banco) sobre un rectángulo de su color
 void dibujarEtiqueta(int8_t jugador, int16_t x, int16_t y, uint8_t tamanio) {
-  const Ficha &f = ficha(jugador);
-  tft.fillRoundRect(x, y, anchoEtiqueta(jugador, tamanio), 8 * tamanio + 2, 4, f.color);
-  escribir(f.nombre, x + 3 * tamanio, y + 1, tamanio, f.colorLetra);
+  dibujarRotulo(nombreDe(jugador), ficha(jugador), x, y, tamanio);
 }
 
 // Fila con el nombre de un jugador a la izquierda y su saldo a la derecha
