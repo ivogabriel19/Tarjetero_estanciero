@@ -19,7 +19,7 @@ Identifiers, comments and Serial messages are in Spanish; keep new code consiste
 - Enabled cards are kept in NVS (`Preferences`, namespace `acceso`, key `datos`) as one `Datos` struct, saved after every change. Bump `VERSION_DATOS` whenever that struct changes.
 - With no cards stored, the first card tapped becomes the master card (`ROL_MAESTRA`). An enabled card opens the relay for `TIEMPO_APERTURA`. The master card does not open: each tap cycles the mode NORMAL → ALTA (each new card tapped is enabled) → BAJA (each card tapped is disabled) → NORMAL. ALTA and BAJA return to NORMAL after `TIEMPO_ADMIN` without cards. The master cannot be removed with `borrar`.
 - Holding the board's BOOT button (GPIO 0) for `TIEMPO_BORRADO` while it runs erases every card, master included. Holding BOOT at reset enters download mode instead.
-- A 4-byte UID starting with 0x08 is random (ISO 14443-3). Phones and bank cards send one, and it changes on every read, so those are rejected and never stored. Supporting phones would need an Android HCE app answering an APDU, not the UID.
+- A 4-byte UID starting with 0x08 is random (ISO 14443-3). Phones and bank cards send one, and it changes on every read, so those are rejected and never stored. Confirmed on the hardware: the user's phone reads as ATQA 0004, SAK 20 (ISO 14443-4), with a UID like `08 1B 77 E5`. Supporting phones would need an Android HCE app answering an APDU, not the UID.
 - `loop()` never blocks, so the phone server can be added later. The reader and the LCD are retried every `INTERVALO_RECONEXION` if they stop answering. `mostrar()` caches both LCD lines and rewrites only the ones that changed.
 - Relay on GPIO 17, `RELE_ACTIVO` HIGH (many relay modules are active LOW). Not confirmed on the hardware.
 - Names are at most 16 letters (one LCD line). `copiarNombre()` strips accents from UTF-8 input because the LCD shows ASCII only.
@@ -55,6 +55,7 @@ The hardware test sketches live in `Tests_HW/`:
 - `Tests_HW/Prueba_LCD_20x4/Prueba_LCD_20x4.ino`: 20x4 LCD test, not run on the hardware yet. It is kept separate from the 16x2 test and uses the same adapter, wiring and driver. Row start addresses in DDRAM are 0x00, 0x40, 0x14 and 0x54, because rows 3 and 4 continue rows 1 and 2. The cursor-position check expects 0x0A, 0x4A, 0x1E and 0x5E after 10 letters per row.
   - Then it runs the demos: a frame drawn with custom corners, the ROM character set (the E0 row tells ROM A00 from A02), 8 icons, 3x2 big digits, a 1-pixel-step progress bar, a 4-row equalizer that measures full-screen redraw time, two marquees, the hardware cursor, and a Pac-Man animation that redefines a CGRAM glyph in place. It ends on a big-digit uptime clock.
   - Each screen loads its own custom glyphs, because CGRAM holds only 8. Any screen that uses custom glyphs writes raw byte buffers through `escribirBytesEn()`, so slot 0 is usable there. The Arduino prototype generator fails on a `const uint8_t (*x)[8]` parameter, so `definirSimbolos()` takes `const uint8_t x[][8]` instead.
+- `Tests_HW/Prueba_PN532_LCD_20x4/Prueba_PN532_LCD_20x4.ino`: like `Prueba_PN532_LCD`, but on the 20x4. Not run on the hardware yet. Row 1 shows the card type, row 2 the full UID (up to 7 bytes with spaces, 10 bytes without), row 3 the ATQA and SAK, and row 4 the UID length and how many reads since boot, or a random-UID warning. The waiting screen shows the PN532 firmware version.
 - `Tests_HW/Prueba_PN532_LCD/Prueba_PN532_LCD.ino`: the PN532 and the LCD sharing the I2C bus, not run on the hardware yet. It shows the card type (from the SAK), the UID length and the UID on the LCD, and it flags random UIDs.
 
 ### LCD 16x2 and 20x4 (Control_Acceso and the LCD tests)
@@ -96,6 +97,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32 Control_Acceso
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_LCD
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_LCD_20x4
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532_LCD
+arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532_LCD_20x4
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_PN532_Display
 arduino-cli compile --fqbn esp32:esp32:esp32 Tests_HW/Prueba_Display
